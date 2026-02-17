@@ -1,0 +1,63 @@
+name: CFN Deploy (Matrix)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "infra/**.yml"
+      - ".github/workflows/cfn-deploy-matrix.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env:
+          - name: dev
+            aws_account: "111111111111"
+            region: "us-east-1"
+            role_name: "github-actions-oidc"
+            params: "Env=dev,DesiredCount=1"
+          - name: stage
+            aws_account: "222222222222"
+            region: "us-east-2"
+            role_name: "github-actions-oidc"
+            params: "Env=stage,DesiredCount=2"
+          - name: prod
+            aws_account: "333333333333"
+            region: "us-west-2"
+            role_name: "github-actions-oidc"
+            params: "Env=prod,DesiredCount=3"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS (${{ matrix.env.name }})
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ matrix.env.aws_account }}:role/${{ matrix.env.role_name }}
+          aws-region: ${{ matrix.env.region }}
+
+      - name: Validate template
+        run: aws cloudformation validate-template --template-body file://infra/template.yml
+
+      - name: Convert params
+        id: params
+        run: |
+          P=$(echo "${{ matrix.env.params }}" | sed 's/,/ /g')
+          echo "args=--parameter-overrides $P" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy stack (${{ matrix.env.name }})
+        run: |
+          aws cloudformation deploy \
+            --stack-name my-app-${{ matrix.env.name }} \
+            --template-file infra/template.yml \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            ${{ steps.params.outputs.args }} \
+            --tags Environment=${{ matrix.env.name }} Application=my-app \
+            --no-fail-on-empty-changeset
